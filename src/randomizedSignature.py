@@ -38,7 +38,7 @@ def randomAbeta(d: int, N: int, std_A=1.0, std_b=1.0):
 
 
 class DrivingFields(torch.nn.Module):
-    def __init__(self, input_channels, hidden_channels, phi=lambda x: x, std_A=1.0, std_b=1.0):
+    def __init__(self, input_channels, hidden_channels, activation=lambda x: x, std_A=1.0, std_b=1.0):
         ######################
         # input_channels is the number of input channels in the data X. (Determined by the data.)
         # hidden_channels is the number of channels for z_t. (Determined by you!)
@@ -48,7 +48,7 @@ class DrivingFields(torch.nn.Module):
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
 
-        self.phi = phi
+        self.activation = activation
 
         self.std_A = std_A
         self.std_b = std_b
@@ -58,7 +58,7 @@ class DrivingFields(torch.nn.Module):
     def forward(self, t, z):
         batch = z.shape[0]  # z : (batch, hidden_channels)
 
-        z = self.phi(z)  # z ->  \phi(z)
+        z = self.activation(z)  # z ->  \phi(z)
         z = torch.cat((z, torch.ones([batch, 1]).to(device)), 1)  # z -> [z,1]
         z = z.unsqueeze(-2).unsqueeze(-1)  # z : (batch, n+1) -> z : (batch, 1, n+1, 1)
         G = self.Gamma.expand(1, -1, -1, -1)  # Gamma : (d, n, n+1) ->  G : (1, d, n, n+1)
@@ -70,14 +70,14 @@ class DrivingFields(torch.nn.Module):
 
 
 # =============================================================================================
-# phi-rSig
+# rSig
 # =============================================================================================
 
 class rSig(torch.nn.Module):
     def __init__(self,
                  input_channels,
                  hidden_channels,
-                 phi=lambda x: x,
+                 activation=lambda x: x,
                  sigmas=torch.tensor([1.0, 1.0, 1.0])):
 
         super(rSig, self).__init__()
@@ -89,7 +89,7 @@ class rSig(torch.nn.Module):
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
 
-        self.fields = DrivingFields(input_channels, hidden_channels, phi, self.std_A, self.std_b)
+        self.fields = DrivingFields(input_channels, hidden_channels, activation, self.std_A, self.std_b)
         self.z0 = torch.normal(0.0, self.std_0, size=(self.hidden_channels,)).to(device)
 
     def forward(self, x, interval=None, interval_return=None):
@@ -133,7 +133,7 @@ class rSigKer(torch.nn.Module):
     def __init__(self,
                  hidden_dim=30,
                  MC_iters=1,
-                 phi=lambda x: x,
+                 activation=lambda x: x,
                  sigmas=torch.tensor([1.0, 1.0, 1.0])):
 
         super(rSigKer, self).__init__()
@@ -141,7 +141,7 @@ class rSigKer(torch.nn.Module):
         # sigmas = [sigma_0, sigma_A, sigma_b]
         self.sigmas = sigmas
 
-        self.phi = phi
+        self.activation = activation
         self.MC_iters = MC_iters
         self.hidden_dim = hidden_dim
 
@@ -156,7 +156,7 @@ class rSigKer(torch.nn.Module):
 
         Returns
         -------
-                    k(x, y) where k(x, y) = \phi - rSigKer
+                    k(x, y) where k(x, y) = neural - rSigKer
         """
 
         if not (x.dim() == 2) or not (y.dim() == 2):
@@ -215,7 +215,7 @@ class rSigKer(torch.nn.Module):
 
                 model = rSig(input_channels=d,
                              hidden_channels=self.hidden_dim,
-                             phi=self.phi,
+                             activation=self.activation,
                              sigmas=self.sigmas)
 
                 S_x = model.forward(X, interval=t_x, interval_return=interval_return)  # (batch_x, times, N)
@@ -229,7 +229,7 @@ class rSigKer(torch.nn.Module):
 
                 model = rSig(input_channels=d,
                              hidden_channels=self.hidden_dim,
-                             phi=self.phi,
+                             activation=self.activation,
                              sigmas=self.sigmas)
 
                 S_x = model.forward(X, interval=t_x, interval_return=interval_return)  # (batch_x, times, N)
