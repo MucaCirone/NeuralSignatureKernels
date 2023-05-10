@@ -196,7 +196,7 @@ class rSigKer(torch.nn.Module):
     def compute_Gram(self, X: torch.Tensor, Y: torch.Tensor,
                      sym: bool = False,
                      interval_return: torch.Tensor = None,
-                     return_same: bool = False):
+                     return_same: bool = False) -> torch.Tensor:
         """
         Computes the Gram matrix G_ij = k(x_i, y_j), where k is the (sum of) Gaussian kernels
         associated to this instance of the discriminator object
@@ -282,10 +282,84 @@ class rSigKer(torch.nn.Module):
 
         return G
 
-    def RKHS_dist(self, X: torch.Tensor, Y: torch.Tensor,
-                  sym: bool = False):
+    def kernel(self, X: torch.Tensor, Y: torch.Tensor,
+               sym: bool = False,
+               interval_return: torch.Tensor = None) -> torch.Tensor:
         """
-        Computes the square of the RKHS distance
+        Computes the Gram matrix G_ij = k(x_i, y_j), where k is the (sum of) Gaussian kernels
+        associated to this instance of the discriminator object
+
+        Parameters
+        ----------
+        X : torch.Tensor (batch, timesteps_x, d)
+            - This is considered as uniformly sampled on [0,1]
+        Y : torch.Tensor (batch, timesteps_y, d)
+            - This is considered as uniformly sampled on [0,1]
+        sym: bool
+            - If True consider X == Y (WITHOUT checks!)
+            - Defaults to False.
+        interval_return: torch.Tensor (times)
+
+        Returns
+        -------
+            K: torch.Tensor
+            - (batch) if interval_return == None
+            - (batch, times, times) else
+            - G[i,s,t] = < S(x_i)_s, S(y_i)_t>_{\R^{hidden}}
+        """
+
+        if not (X.dim() == 3) or not (Y.dim() == 3):
+            raise Exception("Either X or Y are not of type (batch, times, dim).")
+        if not (X.shape[-1] == Y.shape[-1]):
+            raise Exception("d_X and d_Y must be the same!")
+        if not (X.shape[0] == Y.shape[0]):
+            raise Exception("batch_X and batch_Y must be the same!")
+
+        batch, d = X.shape[0], X.shape[-1]
+
+        t_x = torch.linspace(0, 1, X.shape[1])
+        t_y = torch.linspace(0, 1, Y.shape[1])
+
+        flag_none = (interval_return is None)
+        if flag_none:
+            interval_return = torch.tensor([0., 1.]).float().to(device)
+
+        times = interval_return.shape[0]
+
+        K = torch.zeros((self.MC_iters, batch, times, times), device=X.device)
+        for iter in tqdm(range(self.MC_iters)):
+
+            model = rSig(input_channels=d,
+                         hidden_channels=self.hidden_dim,
+                         activation=self.activation,
+                         sigmas=self.sigmas,
+                         cubic=self.cubic)
+
+            # S_*: (batch, times, N)
+            S_x = model.forward(X, interval=t_x, interval_return=interval_return)
+            S_x = S_x.div(np.sqrt(self.hidden_dim))
+
+            if sym:
+                S_y = S_x
+            else:
+                S_y = model.forward(Y, interval=t_y, interval_return=interval_return)
+                S_y = S_y.div(np.sqrt(self.hidden_dim))
+
+            # K[iter][i, s, t] = S_x[i, s] \cdot S_y[i, t] = \sum_k S_x[i, s, *, k] * S_y[i, *, t, k]
+            K[iter] = (S_x.unsqueeze(2) * S_y.unsqueeze(1)).sum(dim=-1)
+
+        if flag_none:
+            K = K[..., -1, -1]
+
+        # G: (batch, times)
+        K = K.mean(dim=0)
+
+        return K
+
+    def RKHS_dist_Gram(self, X: torch.Tensor, Y: torch.Tensor,
+                       sym: bool = False):
+        """
+        Computes the Gram of squared RKHS distance
         associated to this instance of the discriminator object
 
         Parameters
@@ -297,21 +371,46 @@ class rSigKer(torch.nn.Module):
         sym: bool
             - If True consider X == Y (WITHOUT checks!)
             - Defaults to False.
-        interval_return: torch.Tensor (times)
 
         Returns
         -------
-            D: torch.Tensor
-            - The square of RKHS distance
-            - (batch_x, batch_y) if interval_return == None
-            - (batch_x, batch_y, times, times) else
+            D: torch.Tensor (batch_x, batch_y)
             - D[i,j] = <S(x_i)_1 - S(y_j)_1, S(x_i)_1 - S(y_j)_1>_{\R^{hidden}}
         """
 
-        K_XY, Gxx, Gyy = self.compute_Gram_matrix(X, Y, sym=sym, return_same=True)
+        K_XY, Gxx, Gyy = self.compute_Gram(X, Y, sym=sym, return_same=True)
 
         # K_XX[i,j] = Gxx[i] and K_YY[i,j] = Gyy[j]
         D = Gxx.unsqueeze(1) - 2*K_XY + Gyy.unsqueeze(0)
+        return D.sqrt()
+
+    def RKHS_dist(self, X: torch.Tensor, Y: torch.Tensor,
+                  sym: bool = False):
+        """
+        Computes the square of the RKHS distance
+        associated to this instance of the discriminator object
+
+        Parameters
+        ----------
+        X : torch.Tensor (batch, timesteps_x, d)
+            - This is considered as uniformly sampled on [0,1]
+        Y : torch.Tensor (batch, timesteps_y, d)
+            - This is considered as uniformly sampled on [0,1]
+        sym: bool
+            - If True consider X == Y (WITHOUT checks!)
+            - Defaults to False.
+
+        Returns
+        -------
+            D: torch.Tensor (batch)
+            - D[i] = <S(x_i)_1 - S(y_j)_1, S(x_i)_1 - S(y_j)_1>_{\R^{hidden}}
+        """
+
+        K = self.kernel(X, Y, sym)
+        Kxx = self.kernel(X, X, sym=True)
+        Kyy = self.kernel(Y, Y, sym=True)
+
+        D = Kxx - 2*K + Kyy
         return D.sqrt()
 
     def MMD(self, X: torch.float, Y: torch.float, biased=False):
@@ -333,9 +432,9 @@ class rSigKer(torch.nn.Module):
         batch_x = X.shape[0]
         batch_y = Y.shape[0]
 
-        K_XX = self.compute_Gram_matrix(X, X, sym=True)
-        K_XY = self.compute_Gram_matrix(X, Y, sym=False)
-        K_YY = self.compute_Gram_matrix(Y, Y, sym=True)
+        K_XX = self.compute_Gram(X, X, sym=True)
+        K_XY = self.compute_Gram(X, Y, sym=False)
+        K_YY = self.compute_Gram(Y, Y, sym=True)
 
         K_XY_m = torch.mean(K_XY)
 
