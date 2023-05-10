@@ -1,5 +1,6 @@
 import torch
 from src.utils import id_phi
+from collections.abc import Callable
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -11,19 +12,21 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class NeuralSigKer(torch.nn.Module):
     def __init__(self,
-                 V_phi=id_phi,
-                 sigmas={"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}):
+                 V_phi: Callable[[tuple[float, float, float], float]] = id_phi,
+                 sigmas: dict[str, float] = {"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}):
         '''
         Neural Signature Kernel
         Implementation of https://arxiv.org/pdf/2303.17671.pdf
 
         Parameters
         ----------
-        V_phi : function Tuple[float, float, float] -> float
+        V_phi : function tuple[float, float, float] -> float
             - (a,b,c) -> V_phi(\Sigma) with \Sigma := [[a,b],[b,c]]
-        sigmas: dictionary Dict[str, float]
+            - Must be strameable.
+            - Defaults to (a,b,c) -> b
+        sigmas: Dict[str, float]
             - Must contain the keys "sigma_0", "sigma_A", "sigma_b" with float values.
-
+            - Defaults to {"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}.
         '''
 
         super(NeuralSigKer, self).__init__()

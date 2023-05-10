@@ -1,6 +1,7 @@
 import torch
 import torchcde
 import numpy as np
+from collections.abc import Callable
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -75,10 +76,30 @@ class DrivingFields(torch.nn.Module):
 
 class rSig(torch.nn.Module):
     def __init__(self,
-                 input_channels,
-                 hidden_channels,
-                 activation=lambda x: x,
-                 sigmas={"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}):
+                 input_channels: int,
+                 hidden_channels: int,
+                 activation: Callable[[float], float] = lambda x: x,
+                 sigmas: dict[str, float] = {"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0},
+                 cubic: bool = False) -> None:
+        """
+        Randomized Signatures.
+        Implementation of https://arxiv.org/pdf/2303.17671.pdf
+
+        Parameters
+        ----------
+        input_channels: int
+        hidden_channels: int
+        activation: function float -> float
+            - Must be streamable.
+            - Defaults to the identity.
+        sigmas: Dict[str, float]
+            - Must contain the keys "sigma_0", "sigma_A", "sigma_b" with float values.
+            - Defaults to {"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}.
+        cubic: bool
+            - If True use cubic interpolation
+            - If False use linear interpolation.
+            - Defaults to False.
+        """
 
         super(rSig, self).__init__()
 
@@ -89,27 +110,51 @@ class rSig(torch.nn.Module):
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
 
+        self.cubic = cubic
+
         self.fields = DrivingFields(input_channels, hidden_channels, activation, self.std_A, self.std_b)
         self.z0 = torch.normal(0.0, self.std_0, size=(self.hidden_channels,)).to(device)
 
-    def forward(self, x, interval=None, interval_return=None):
+    def forward(self, x: torch.Tensor,
+                interval: torch.Tensor = None,
+                interval_return: torch.Tensor = None) -> torch.Tensor:
+        """
+        Computes the Batch Neural Randomized Signature.
+
+        Parameters
+        ----------
+        x: torch.Tensor (batch, timesteps, input_channels)
+        interval: torch.Tensor (timesteps)
+            - Timestamps of observations.
+            - If None consider it to be linspace(0, 1, timesteps)
+            - Defaults to None.
+        interval_return: torch.Tensor (timesteps)
+            - Timestamps of rSig to return.
+            - If None return only last value.
+            - Defaults to None.
+
+        Returns
+        ----------
+        z_T: torch.Tensor (batch, len(interval_return), hidden_channels)
+        """
 
         flag = (interval_return is None)
-
-        coeffs = torchcde.natural_cubic_coeffs(x).float()
-        batch = coeffs.shape[0]
+        batch = x.shape[0]
 
         if interval is None:
-            X = torchcde.interpolation_cubic.NaturalCubicSpline(coeffs)
+            interval = torch.linspace(0, 1., x.shape[1])
+
+        if self.cubic:
+            coeffs = torchcde.natural_cubic_coeffs(x, interval).float()
+            X = torchcde.CubicSpline(coeffs, interval)
         else:
-            X = torchcde.interpolation_cubic.NaturalCubicSpline(coeffs, interval)
+            coeffs = torchcde.linear_interpolation_coeffs(x, interval).float()
+            X = torchcde.LinearInterpolation(coeffs, interval)
 
         if flag:
             interval_return = X.interval
 
-        # X0 = X.evaluate(X.interval[0])
         z0 = (self.z0).expand(batch, -1)
-
         z_T = torchcde.cdeint(X=X, z0=z0,
                               func=self.fields,
                               t=interval_return)
