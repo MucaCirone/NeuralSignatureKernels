@@ -2,6 +2,7 @@ import torch
 import torchcde
 import numpy as np
 from collections.abc import Callable
+from tqdm import tqdm
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -34,7 +35,7 @@ def randomAbeta(d: int, N: int, std_A=1.0, std_b=1.0):
 
 
 # =============================================================================================
-# Create the random Neural CDE system
+# Neural CDE system
 # =============================================================================================
 
 
@@ -175,60 +176,50 @@ class rSigKer(torch.nn.Module):
 
     Metric is the (unbiased) MMD.
     """
+
     def __init__(self,
-                 hidden_dim=30,
-                 MC_iters=1,
-                 activation=lambda x: x,
-                 sigmas={"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}):
+                 hidden_dim: int = 30,
+                 MC_iters: int = 1,
+                 activation: Callable[[float], float] = lambda x: x,
+                 sigmas: dict[str, float] = {"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0},
+                 cubic: bool = False):
 
         super(rSigKer, self).__init__()
 
         self.sigmas = sigmas
+        self.cubic = cubic
 
         self.activation = activation
         self.MC_iters = MC_iters
         self.hidden_dim = hidden_dim
 
-    def kernel(self, x: torch.float, y: torch.float, interval_return=None):
-        """
-        rSig kernel on R^d
-
-        Parameters
-        ----------
-        x : torch.tensor of dim (timesteps_x, d)
-        y : torch.tensor of dim (timesteps_y, d)
-
-        Returns
-        -------
-                    k(x, y) where k(x, y) = neural - rSigKer
-        """
-
-        if not (x.dim() == 2) or not (y.dim() == 2):
-            raise Exception("Maybe you should use compute_Gram_matrix(X,Y,...)!")
-
-        X = x.clone().detach().unsqueeze(0)  # (1, timesteps_x, d)
-        Y = y.clone().detach().unsqueeze(0)  # (1, timesteps_y, d)
-
-        res = self.compute_Gram_matrix(X, Y, interval_return)
-
-        if interval_return is None:
-            return res[0, 0]
-
-        return res[:, 0, 0]
-
-    def compute_Gram_matrix(self, X: torch.float, Y: torch.float, interval_return=None):
+    def compute_Gram_matrix(self, X: torch.Tensor, Y: torch.Tensor,
+                            sym: bool = False,
+                            interval_return: torch.Tensor = None,
+                            return_same: bool = False):
         """
         Computes the Gram matrix G_ij = k(x_i, y_j), where k is the (sum of) Gaussian kernels
         associated to this instance of the discriminator object
 
         Parameters
         ----------
-        X : torch.tensor of dim (batch_x, timesteps_x, d)
-        Y : torch.tensor of dim (batch_y, timesteps_y, d)
+        X : torch.Tensor (batch_x, timesteps_x, d)
+            - This is considered as uniformly sampled on [0,1]
+        Y : torch.Tensor (batch_y, timesteps_y, d)
+            - This is considered as uniformly sampled on [0,1]
+        sym: bool
+            - If True consider X == Y (WITHOUT checks!)
+            - Defaults to False.
+        interval_return: torch.Tensor (times)
+        return_same: bool
+            - If True then return Gxx[i] = k(x_i,x_i) and Gyy[j] = k(y_j,y_j)
 
         Returns
         -------
-                    Gram matrix as specified above
+            G: torch.Tensor
+            - (batch_x, batch_y) if interval_return == None
+            - (batch_x, batch_y, times, times) else
+            - G[i,j,s,t] = < S(x)_s, S(y)_t>_{\R^{hidden}}
         """
 
         if not (X.dim() == 3) or not (Y.dim() == 3):
@@ -237,10 +228,6 @@ class rSigKer(torch.nn.Module):
             raise Exception("dim_X and dim_Y must be the same!")
 
         batch_x, batch_y, d = X.shape[0], Y.shape[0], X.shape[-1]
-
-        X_equal_Y = (batch_x == batch_y and X.shape[1] == Y.shape[1])
-        if X_equal_Y:
-            X_equal_Y = (X == Y).all()
 
         t_x = torch.linspace(0, 1, X.shape[1])
         t_y = torch.linspace(0, 1, Y.shape[1])
@@ -251,49 +238,83 @@ class rSigKer(torch.nn.Module):
 
         times = interval_return.shape[0]
 
-        dotPs = torch.zeros((self.MC_iters, times, batch_x, batch_y), device=X.device)
+        dotPs = torch.zeros((self.MC_iters, batch_x, batch_y, times, times), device=X.device)
+        if return_same:
+            Gxx = torch.zeros((self.MC_iters, batch_x), device=X.device)
+            Gyy = torch.zeros((self.MC_iters, batch_y), device=X.device)
 
-        # If X == Y compute rSig only once
-        if X_equal_Y:
-            for iter in range(self.MC_iters):
+        for iter in tqdm(range(self.MC_iters)):
 
-                model = rSig(input_channels=d,
-                             hidden_channels=self.hidden_dim,
-                             activation=self.activation,
-                             sigmas=self.sigmas)
+            model = rSig(input_channels=d,
+                         hidden_channels=self.hidden_dim,
+                         activation=self.activation,
+                         sigmas=self.sigmas,
+                         cubic=self.cubic)
 
-                S_x = model.forward(X, interval=t_x, interval_return=interval_return)  # (batch_x, times, N)
-                S_x = S_x.div(np.sqrt(self.hidden_dim))
+            # S_x: (batch_x, times, N)
+            S_x = model.forward(X, interval=t_x, interval_return=interval_return)
+            S_x = S_x.div(np.sqrt(self.hidden_dim))
 
-                # Compute dotPs[iter][t, i, j] = S_x[i, t, :] \cdot S_x[j, t, :]
-                dotPs[iter] = S_x.swapdims(0, 1) @ S_x.swapdims(0, 1).swapdims(1, 2)
-
-        else:
-            for iter in range(self.MC_iters):
-
-                model = rSig(input_channels=d,
-                             hidden_channels=self.hidden_dim,
-                             activation=self.activation,
-                             sigmas=self.sigmas)
-
-                S_x = model.forward(X, interval=t_x, interval_return=interval_return)  # (batch_x, times, N)
-                S_x = S_x.div(np.sqrt(self.hidden_dim))
-
-                S_y = model.forward(Y, interval=t_y, interval_return=interval_return)  # (batch_y, times, N)
+            # S_y: (batch_y, times, N)
+            if sym:
+                S_y = S_x
+            else:
+                S_y = model.forward(Y, interval=t_y, interval_return=interval_return)  
                 S_y = S_y.div(np.sqrt(self.hidden_dim))
 
-                # Compute dotPs[iter][t, i, j] = S_x[i, t, :] \cdot S_y[j, t, :]
-                dotPs[iter] = S_x.swapdims(0, 1) @ S_y.swapdims(0, 1).swapaxes(1, 2)
-                # dotPs[iter] = torch.einsum('itn, jtn -> tij', S_x, S_y)
+            # dotPs[iter][i, j, s, t] = S_x[i, s] \cdot S_y[j, t] = \sum_k S_x[i, *, s, *, k] * S_y[*, j, *, t, k]
+            dotPs[iter] = (S_x.unsqueeze(1).unsqueeze(3) * S_y.unsqueeze(0).unsqueeze(2)).sum(dim=-1)
+
+            if return_same:
+                # Gxx[iter][i] = S_x[i, -1] \cdot S_y[j, -1] = \sum_k S_x[i, -1, k] * S_y[i, -1, k]
+                Gxx[iter] = (S_x[:, -1] * S_x[:, -1]).sum(dim=-1)
+                Gyy[iter] = (S_y[:, -1] * S_y[:, -1]).sum(dim=-1)
 
         if flag_none:
-            dotPs = dotPs[:, -1, :, :]
+            dotPs = dotPs[..., -1, -1]
 
-        res = dotPs.mean(dim=0)  # (times, batch_x, batch_y)
+        # G: (batch_x, batch_y, times, times)
+        G = dotPs.mean(dim=0)
 
-        return res
+        if return_same:
+            Gxx, Gyy = Gxx.mean(dim=0), Gyy.mean(dim=0)
+            return G, Gxx, Gyy
 
-    def metric(self, X: torch.float, Y: torch.float, biased=False):
+        return G
+
+    def RKHS_dist(self, X: torch.Tensor, Y: torch.Tensor,
+                  sym: bool = False):
+        """
+        Computes the square of the RKHS distance
+        associated to this instance of the discriminator object
+
+        Parameters
+        ----------
+        X : torch.Tensor (batch_x, timesteps_x, d)
+            - This is considered as uniformly sampled on [0,1]
+        Y : torch.Tensor (batch_y, timesteps_y, d)
+            - This is considered as uniformly sampled on [0,1]
+        sym: bool
+            - If True consider X == Y (WITHOUT checks!)
+            - Defaults to False.
+        interval_return: torch.Tensor (times)
+
+        Returns
+        -------
+            D: torch.Tensor
+            - The square of RKHS distance
+            - (batch_x, batch_y) if interval_return == None
+            - (batch_x, batch_y, times, times) else
+            - D[i,j] = <S(x_i)_1 - S(y_j)_1, S(x_i)_1 - S(y_j)_1>_{\R^{hidden}}
+        """
+
+        K_XY, Gxx, Gyy = self.compute_Gram_matrix(X, Y, sym=sym, return_same=True)
+
+        # K_XX[i,j] = Gxx[i] and K_YY[i,j] = Gyy[j]
+        D = Gxx.unsqueeze(1) - 2*K_XY + Gyy.unsqueeze(0)
+        return D.sqrt()
+
+    def MMD(self, X: torch.float, Y: torch.float, biased=False):
         """
         Calculates the empirical estimate to the squared Maximum Mean Discrepancy (MMD) between batched samples
         x \in R^d and y \in R^d.
@@ -312,9 +333,9 @@ class rSigKer(torch.nn.Module):
         batch_x = X.shape[0]
         batch_y = Y.shape[0]
 
-        K_XX = self.compute_Gram_matrix(X, X)
-        K_XY = self.compute_Gram_matrix(X, Y)
-        K_YY = self.compute_Gram_matrix(Y, Y)
+        K_XX = self.compute_Gram_matrix(X, X, sym=True)
+        K_XY = self.compute_Gram_matrix(X, Y, sym=False)
+        K_YY = self.compute_Gram_matrix(Y, Y, sym=True)
 
         K_XY_m = torch.mean(K_XY)
 
