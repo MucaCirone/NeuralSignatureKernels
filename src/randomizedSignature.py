@@ -193,10 +193,10 @@ class rSigKer(torch.nn.Module):
         self.MC_iters = MC_iters
         self.hidden_dim = hidden_dim
 
-    def compute_Gram_matrix(self, X: torch.Tensor, Y: torch.Tensor,
-                            sym: bool = False,
-                            interval_return: torch.Tensor = None,
-                            return_same: bool = False):
+    def compute_Gram(self, X: torch.Tensor, Y: torch.Tensor,
+                     sym: bool = False,
+                     interval_return: torch.Tensor = None,
+                     return_same: bool = False):
         """
         Computes the Gram matrix G_ij = k(x_i, y_j), where k is the (sum of) Gaussian kernels
         associated to this instance of the discriminator object
