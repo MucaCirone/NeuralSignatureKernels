@@ -12,7 +12,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class NeuralSigKer(torch.nn.Module):
     def __init__(self,
                  V_phi=id_phi,
-                 sigmas={"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 1.0}):
+                 sigmas={"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}):
         '''
         Neural Signature Kernel
         Implementation of https://arxiv.org/pdf/2303.17671.pdf

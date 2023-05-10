@@ -78,13 +78,13 @@ class rSig(torch.nn.Module):
                  input_channels,
                  hidden_channels,
                  activation=lambda x: x,
-                 sigmas=torch.tensor([1.0, 1.0, 1.0])):
+                 sigmas={"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}):
 
         super(rSig, self).__init__()
 
-        self.std_0 = sigmas[0]
-        self.std_A = sigmas[1]
-        self.std_b = sigmas[2]
+        self.std_0 = sigmas["sigma_0"]
+        self.std_A = sigmas["sigma_A"]
+        self.std_b = sigmas["sigma_b"]
 
         self.input_channels = input_channels
         self.hidden_channels = hidden_channels
@@ -134,11 +134,10 @@ class rSigKer(torch.nn.Module):
                  hidden_dim=30,
                  MC_iters=1,
                  activation=lambda x: x,
-                 sigmas=torch.tensor([1.0, 1.0, 1.0])):
+                 sigmas={"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}):
 
         super(rSigKer, self).__init__()
 
-        # sigmas = [sigma_0, sigma_A, sigma_b]
         self.sigmas = sigmas
 
         self.activation = activation
