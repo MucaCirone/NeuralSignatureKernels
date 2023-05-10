@@ -259,7 +259,7 @@ class rSigKer(torch.nn.Module):
             if sym:
                 S_y = S_x
             else:
-                S_y = model.forward(Y, interval=t_y, interval_return=interval_return)  
+                S_y = model.forward(Y, interval=t_y, interval_return=interval_return)
                 S_y = S_y.div(np.sqrt(self.hidden_dim))
 
             # dotPs[iter][i, j, s, t] = S_x[i, s] \cdot S_y[j, t] = \sum_k S_x[i, *, s, *, k] * S_y[*, j, *, t, k]
