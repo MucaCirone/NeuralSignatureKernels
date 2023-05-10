@@ -111,9 +111,6 @@ class NeuralSigKer(torch.nn.Module):
         batch_x, batch_y = X.shape[0], Y.shape[0]
         timesteps_x, timesteps_y = X.shape[1], Y.shape[1]
 
-        Kxx_expand = Kxx.unsqueeze(1).expand(-1, batch_y, -1, -1)
-        Kyy_expand = Kyy.unsqueeze(0).expand(batch_x, -1, -1, -1)
-
         var_0, var_A, var_b = self.std_0**2, self.std_A**2, self.std_b**2
 
         # dXdY: (batch_x, batch_y, timesteps_x-1, timesteps_y-1)
@@ -130,7 +127,7 @@ class NeuralSigKer(torch.nn.Module):
         def compute_next(s, t):
             past = K[..., s+1, t] + K[..., s, t+1] - K[..., s, t]
             # innovation: (batch_x, batch_y)
-            innovation = (var_A * self.V_phi(Kxx_expand[..., s, s], K[..., s, t], Kyy_expand[..., t, t]) + var_b) * dXdY[..., s, t]
+            innovation = (var_A * self.V_phi(Kxx.unsqueeze(1)[..., s, s], K[..., s, t], Kyy.unsqueeze(0)[..., t, t]) + var_b) * dXdY[..., s, t]
             return past + innovation
 
         for s in range(timesteps_x-1):
@@ -434,9 +431,6 @@ class inhomNeuralSigKer(torch.nn.Module):
         batch_x, batch_y = X.shape[0], Y.shape[0]
         timesteps = X.shape[1]
 
-        Kxx_expand = Kxx.unsqueeze(1).expand(-1, batch_y, -1)
-        Kyy_expand = Kyy.unsqueeze(0).expand(batch_x, -1, -1)
-
         var_0, var_A, var_b = self.std_0**2, self.std_A**2, self.std_b**2
 
         if interval is None:
@@ -455,7 +449,7 @@ class inhomNeuralSigKer(torch.nn.Module):
         # Helper Function
         def compute_next(t):
             past = K[..., t]
-            innovation = (var_A * self.V_phi(Kxx_expand[..., t], K[..., t], Kyy_expand[..., t]) + var_b) * dXdY[..., t]/dt[t]
+            innovation = (var_A * self.V_phi(Kxx.unsqueeze(0)[..., t], K[..., t], Kyy.unsqueeze(1)[..., t]) + var_b) * dXdY[..., t]/dt[t]
             return past + innovation
 
         for t in range(timesteps-1):
