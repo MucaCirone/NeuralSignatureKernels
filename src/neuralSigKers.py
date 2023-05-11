@@ -1254,7 +1254,7 @@ class NTKer(torch.nn.Module):
     """
         # Neural Tangent Neural Signature Kernel - NTK Kernel
 
-        d^2 Xi_phi^{x,y}(s,t) = [ V_phi^{x,y}(s,t) + {\dot V}_phi^{x,y}(s,t) * Xi_phi^{x,y}(s,t) ] <dx_s, dy_t>
+        Theta_phi^{x,y}(s,t) = K_phi^{x,y}(s,t) + Omega_phi^{x,y}(s,t) + Xi_phi^{x,y}(s,t)
     """
 
     def __init__(self,
