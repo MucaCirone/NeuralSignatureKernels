@@ -1647,7 +1647,7 @@ class NTKer(torch.nn.Module):
             Kxy = self.phiSK.kernel(X, Y, Kxx, Kyy, sym=sym)
 
         # OmegaK_kernel = self.OmegaK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym)
-        # XiK_kernel = self.XiK_old.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym)
+        # XiK_kernel = self.XiK_old.kernel(X, Y, Kxx, Kyy, Kxy,sym=sym)
         # Theta = Kxy + OmegaK_kernel + XiK_kernel
 
         XiK_kernel = self.XiK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym)
