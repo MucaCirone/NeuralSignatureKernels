@@ -905,7 +905,7 @@ class OmegaKer(torch.nn.Module):
         batch_x, batch_y = X.shape[0], Y.shape[0]
         timesteps_x, timesteps_y = X.shape[1], Y.shape[1]
 
-        var_0, var_A = self.std_0**2, self.std_A**2, self.std_b**2
+        var_0, var_A = self.std_0**2, self.std_A**2
 
         # dXdY: (batch_x, batch_y, timesteps_x-1, timesteps_y-1)
         # dXdY[i, j, s, t] = < dx_i(s), dy_j(t) > = \sum_{k=1}^d dX[i, *, s, *, k] * dY[*, j, *, t, k]
@@ -1293,6 +1293,9 @@ class NTKer(torch.nn.Module):
         self.OmegaK = OmegaKer(self.V_phi, self.V_dot_phi, self.sigmas)
         self.XiK = XiKer(self.V_phi, self.V_dot_phi, self.sigmas)
 
+        self.K = None
+        self.Gram = None
+
     def kernel(self, X: torch.Tensor, Y: torch.Tensor,
                Kxx: torch.Tensor = None,
                Kyy: torch.Tensor = None,
@@ -1345,7 +1348,10 @@ class NTKer(torch.nn.Module):
         OmegaK_kernel = self.OmegaK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym)
         XiK_kernel = self.XiK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym)
 
-        return Kxy + OmegaK_kernel + XiK_kernel
+        Theta = Kxy + OmegaK_kernel + XiK_kernel
+        self.K = Theta
+
+        return Theta
 
     def compute_Gram(self,
                      X: torch.Tensor, Y: torch.Tensor,
@@ -1399,10 +1405,13 @@ class NTKer(torch.nn.Module):
         if Kxy is None:
             Kxy = self.phiSK.compute_Gram(X, Y, Kxx, Kyy, sym=sym, max_batch=max_batch)
 
-        Omega_Gram = self.OmegaK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym, max_batch=max_batch)
-        Xi_Gram = self.XiK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym, max_batch=max_batch)
+        Omega_Gram = self.OmegaK.compute_Gram(X, Y, Kxx, Kyy, Kxy, sym=sym, max_batch=max_batch)
+        Xi_Gram = self.XiK.compute_Gram(X, Y, Kxx, Kyy, Kxy, sym=sym, max_batch=max_batch)
 
-        return Kxy + Omega_Gram + Xi_Gram
+        Theta = Kxy + Omega_Gram + Xi_Gram
+        self.Gram = Theta
+
+        return Theta
 
     def _compatibility_checks(self, X: torch.Tensor, Y: torch.Tensor) -> None:
         """
