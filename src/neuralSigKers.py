@@ -677,7 +677,7 @@ class OmegaKer(torch.nn.Module):
             - Must be streamable.
             - Defaults to (a,b,c) -> b
          V_phi : function tuple[float, float, float] -> float
-            - (a,b,c) -> {\dot V}_phi(\Sigma) with \Sigma := [[a,b],[b,c]] 
+            - (a,b,c) -> {\dot V}_phi(\Sigma) with \Sigma := [[a,b],[b,c]]
             - Must be streamable.
             - Defaults to (a,b,c) -> 0.0
         sigmas: Dict[str, float]
@@ -974,7 +974,7 @@ class XiKer(torch.nn.Module):
             - Must be streamable.
             - Defaults to (a,b,c) -> b
          V_phi : function tuple[float, float, float] -> float
-            - (a,b,c) -> {\dot V}_phi(\Sigma) with \Sigma := [[a,b],[b,c]] 
+            - (a,b,c) -> {\dot V}_phi(\Sigma) with \Sigma := [[a,b],[b,c]]
             - Must be streamable.
             - Defaults to (a,b,c) -> 0.0
         sigmas: Dict[str, float]
@@ -1251,10 +1251,31 @@ class XiKer(torch.nn.Module):
 
 
 class NTKer(torch.nn.Module):
+    """
+        # Neural Tangent Neural Signature Kernel - NTK Kernel
+
+        d^2 Xi_phi^{x,y}(s,t) = [ V_phi^{x,y}(s,t) + {\dot V}_phi^{x,y}(s,t) * Xi_phi^{x,y}(s,t) ] <dx_s, dy_t>
+    """
+
     def __init__(self,
-                 V_phi=id_phi,
-                 V_dot_phi=id_dot_phi,
-                 sigmas=torch.tensor([1.0, 1.0, 1.0])):
+                 V_phi: Callable[[tuple[float, float, float], float]] = id_phi,
+                 V_dot_phi: Callable[[tuple[float, float, float], float]] = id_dot_phi,
+                 sigmas: dict[str, float] = {"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}) -> None:
+        """
+        Parameters
+        ----------
+        V_phi : function tuple[float, float, float] -> float
+            - (a,b,c) -> V_phi(\Sigma) with \Sigma := [[a,b],[b,c]]
+            - Must be streamable.
+            - Defaults to (a,b,c) -> b
+         V_phi : function tuple[float, float, float] -> float
+            - (a,b,c) -> {\dot V}_phi(\Sigma) with \Sigma := [[a,b],[b,c]]
+            - Must be streamable.
+            - Defaults to (a,b,c) -> 0.0
+        sigmas: Dict[str, float]
+            - Must contain the keys "sigma_0", "sigma_A", "sigma_b" with float values.
+            - Defaults to {"sigma_0": 1.0, "sigma_A": 1.0, "sigma_b": 0.0}.
+        """
 
         super(NTKer, self).__init__()
 
@@ -1263,24 +1284,142 @@ class NTKer(torch.nn.Module):
 
         self.sigmas = sigmas
 
-        self.var_0 = sigmas[0] ** 2
-        self.var_A = sigmas[1] ** 2
-        self.var_b = sigmas[2] ** 2
+        self.std_0 = sigmas["sigma_0"]
+        self.std_A = sigmas["sigma_A"]
+        self.std_b = sigmas["sigma_b"]
 
-        self.phiSK = phiSigKer(self.V_phi, self.sigmas)
+        # The needed Kernels
+        self.phiSK = NeuralSigKer(self.V_phi, self.sigmas)
         self.OmegaK = OmegaKer(self.V_phi, self.V_dot_phi, self.sigmas)
         self.XiK = XiKer(self.V_phi, self.V_dot_phi, self.sigmas)
 
-    def kernel(self, x, y, Kxx=None, Kyy=None, Kxy=None):
+    def kernel(self, X: torch.Tensor, Y: torch.Tensor,
+               Kxx: torch.Tensor = None,
+               Kyy: torch.Tensor = None,
+               Kxy: torch.Tensor = None,
+               sym: bool = False) -> torch.Tensor:
+        """
+        Computes the batched Full NTK on R^d-valued paths in a neat package.
+        !! Make sure elements in X and Y all sample on the same grid !!
+        !! Make batches of X and Y are equal !!
 
+        Parameters
+        ----------
+        X: torch.Tensor (batch, timesteps_x, d)
+        Y: torch.Tensor (batch, timesteps_y, d)
+        Kxx: torch.Tensor (batch, timesteps_x, timesteps_x)
+            - The batched NSK on X: Kxx[i,s,t] = K_phi^{x_i,x_i}(s,t)
+            - if None then compute from scratch, else use the given data.
+            - !! Must have all times !!
+        Kyy: torch.Tensor(batch, timesteps_y, timesteps_y)
+            - The batched NSK on Y: Kyy[i,s,t] = K_phi^{y_i,y_i}(s,t)
+            - if None then compute from scratch, else use the given data.
+            - !! Must have all times !!
+        Kxy: torch.Tensor(batch, timesteps_x, timesteps_y)
+            - The batched NSK on (X,Y): Kyy[i,s,t] = K_phi^{x_i,y_i}(s,t)
+            - if None then compute from scratch, else use the given data.
+            - !! Must have all times !!
+        sym: bool
+            - if True then X and Y are treated as being equal .
+            - !! This is done WITHOUT CHECKS!!
+
+        Returns
+        -------
+        NTK: torch.Tensor (batch, timesteps_x, timesteps_y)
+            - NTK[i, s, t] = Theta_{phi}^{x_i,y_i}(s,t)
+        """
+
+        # Some preliminary checks
+
+        ## Correct Shape
+        if not (X.shape == Y.shape):
+            raise Exception("X and Y must have the same shape!")
+        ## Check if Kxx and Kyy have already been supplied, if not compute them
         if Kxx is None:
-            Kxx = self.phiSK.K_same(x)
+            Kxx = self.phiSK._kernel_same(X)
         if Kyy is None:
-            Kyy = self.phiSK.K_same(y)
+            Kyy = self.phiSK._kernel_same(Y)
         if Kxy is None:
-            Kxy = self.phiSK.kernel(x, y, Kxx, Kyy)
+            Kxy = self.phiSK.kernel(X, Y, Kxx, Kyy, sym=sym)
 
-        OmegaK_kernel = self.OmegaK.kernel(x, y, Kxx, Kyy, Kxy)
-        XiK_kernel = self.XiK.kernel(x, y, Kxx, Kyy, Kxy)
+        OmegaK_kernel = self.OmegaK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym)
+        XiK_kernel = self.XiK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym)
 
         return Kxy + OmegaK_kernel + XiK_kernel
+
+    def compute_Gram(self,
+                     X: torch.Tensor, Y: torch.Tensor,
+                     Kxx: torch.Tensor = None,
+                     Kyy: torch.Tensor = None,
+                     Kxy: torch.Tensor = None,
+                     sym: bool = False,
+                     max_batch: int = 50) -> torch.Tensor:
+        """
+        Computes the batched Full NTK Gram matrix on R^d paths in a neat package.
+        !! Make sure elements in X and Y all sample on the same grid !!
+
+        Parameters
+        ----------
+        X: torch.Tensor (batch_x, timesteps_x, d)
+        Y: torch.Tensor (batch_y, timesteps_y, d)
+        Kxx: torch.Tensor (batch_x, timesteps_x, timesteps_x)
+            - The batched NSK on X: Kxx[i,s,t] = K_phi^{x_i,x_i}(s,t)
+            - if None then compute from scratch, else use the given data.
+            - !! Must have all times !!
+        Kyy: torch.Tensor(batch_y, timesteps_y, timesteps_y)
+            - The batched NSK on Y: Kyy[j,s,t] = K_phi^{y_j,y_j}(s,t)
+            - if None then compute from scratch, else use the given data.
+            - !! Must have all times !!
+        Kxy: torch.Tensor(batch_x, batch_y, timesteps_x, timesteps_y)
+            - The batched NSK on (X,Y): Kyy[i,s,t] = K_phi^{x_i,y_i}(s,t)
+            - if None then compute from scratch, else use the given data.
+            - !! Must have all times !!
+        max_batch: int
+            - the maximum batch size for the computation.
+        sym: bool
+            - if True then X and Y are treated as being equal .
+            - This is done WITHOUT CHECKS!!
+
+        Returns
+        -------
+        NTK: torch.Tensor (batch_x, batch_y, timesteps_x, timesteps_y)
+            - NTK[i, j, s, t] = \Theta_{phi}^{x_i,y_j}(s,t)
+        """
+
+        self._compatibility_checks(X, Y)
+
+        # Check if Kxx and Kyy have already been supplied, if not compute them
+        if Kxx is None:
+            Kxx = self.phiSK._kernel_same(X)
+        if Kyy is None:
+            if sym:
+                Kyy = Kxx
+            else:
+                Kyy = self.phiSK._kernel_same(Y)
+        if Kxy is None:
+            Kxy = self.phiSK.compute_Gram(X, Y, Kxx, Kyy, sym=sym, max_batch=max_batch)
+
+        Omega_Gram = self.OmegaK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym, max_batch=max_batch)
+        Xi_Gram = self.XiK.kernel(X, Y, Kxx, Kyy, Kxy, sym=sym, max_batch=max_batch)
+
+        return Kxy + Omega_Gram + Xi_Gram
+
+    def _compatibility_checks(self, X: torch.Tensor, Y: torch.Tensor) -> None:
+        """
+        Makes some needed compatibility checks.
+
+        Parameters
+        ----------
+        X: torch.Tensor (batch_x, timesteps_x, d)
+        Y: torch.Tensor (batch_y, timesteps_y, d)
+        """
+
+        if not (X.dim() == 3) or not (Y.dim() == 3):
+            raise Exception("Either X or Y are not of type (batch, times, dim).")
+
+        if not (X.shape[-1] == Y.shape[-1]):
+            raise Exception("d_X and d_Y must be the same!")
+
+        if not (X.shape[1] == Y.shape[1]):
+            raise NotImplementedError("Different Grid case not yet implemented. \n"
+                                      "Use torchcde package to interpolate the data")
