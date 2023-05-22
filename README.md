@@ -52,3 +52,19 @@ esr = signature_kernel.compute_expected_scoring_rule(X,Y,max_batch)
 # Sig CHSIC: XY|Z
 sigchsic = signature_kernel.SigCHSIC(X, Y, Z, static_kernel, dyadic_order=1, eps=0.1)
 ```
+
+## Citation
+
+```bibtex
+@misc{cirone2023neural,
+      title={Neural signature kernels as infinite-width-depth-limits of controlled ResNets}, 
+      author={Nicola Muca Cirone and Maud Lemercier and Cristopher Salvi},
+      year={2023},
+      eprint={2303.17671},
+      archivePrefix={arXiv},
+      primaryClass={math.DS}
+}
+```
+
+<!-- 
+-->
