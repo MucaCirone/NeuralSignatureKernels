@@ -29,18 +29,18 @@ X = torch.rand((batch, timesteps, dim), dtype=torch.float64) # shape (batch, len
 Y = torch.rand((batch, timesteps, dim), dtype=torch.float64) # shape (batch, len_y, dim)
 
 # Initialize Kernel
-neural_Kernel = NeuralSigKer(V_phi=ReLU_phi, 
+neural_kernel = NeuralSigKer(V_phi=ReLU_phi, 
                              sigmas=sigmas)
 
 # Compute Gram Matrix
 # G: (batch, batch, timesteps, timesteps)
 # G[i, j, s, t] = K^{x_i, y_i}(s,t)
-G = neural_Kernel.compute_Gram(X, Y, sym=False, max_batch=50)
+G = neural_kernel.compute_Gram(X, Y, sym=False, max_batch=50)
 
 # Compute Kernel batch-wise
 # K: (batch, timesteps, timesteps)
 # K[i, s, t] = K^{x_i,y_i}(s,t)
-K = neural_Kernel.kernel(X, Y)
+K = neural_kernel.kernel(X, Y)
 ```
 
 ## Citation
